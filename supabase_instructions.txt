@@ -1,3 +1,10 @@
+-- IMPORTANT: If you have existing data from the old schema (1536-dim embeddings),
+-- run this migration first to drop the old table and recreate with 768-dim schema:
+--
+-- DROP TABLE IF EXISTS documents CASCADE;
+--
+-- Then run the full schema setup below:
+
 -- Enable the vector extension for embeddings
 -- This extension allows PostgreSQL to store and search vector data efficiently
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -8,7 +15,7 @@ CREATE TABLE documents (
   id BIGSERIAL PRIMARY KEY,
   content TEXT NOT NULL,
   metadata JSONB,
-  embedding vector(1536),  -- OpenAI's text-embedding-3-small produces 1536-dimensional vectors
+  embedding vector(768),  -- nomic-embed-text produces 768-dimensional vectors
   file_path text null,
   file_url text null
 );
@@ -20,7 +27,7 @@ CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops);
 -- Create a function for matching documents based on similarity
 -- This function finds the most similar document chunks to a query embedding
 CREATE OR REPLACE FUNCTION match_documents(
-  query_embedding vector(1536),
+  query_embedding vector(768),
   match_threshold float,
   match_count int
 )

@@ -1,15 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
-import OpenAI from 'openai';
 import { NextResponse } from 'next/server';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import mammoth from 'mammoth';
+import { generateEmbedding } from '@/lib/ollama';
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabaseStorage = createClient(url, serviceKey || anonKey);
 const supabase = createClient(url, anonKey);
-const openai = new OpenAI();
 
 function safeDecodeURIComponent(str: string): string {
   try { return decodeURIComponent(str); }
@@ -74,10 +73,7 @@ export async function POST(req: Request) {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       
-      const emb = await openai.embeddings.create({
-        model: 'text-embedding-3-small',
-        input: chunk,
-      });
+      const embedding = await generateEmbedding(chunk);
 
       const { error } = await supabase.from('documents').insert({
         content: chunk,
@@ -93,7 +89,7 @@ export async function POST(req: Request) {
           file_path: filePath,
           file_url: urlData.publicUrl,
         },
-        embedding: JSON.stringify(emb.data[0].embedding),
+        embedding: JSON.stringify(embedding),
       });
 
       if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
