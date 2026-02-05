@@ -54,6 +54,8 @@ export async function POST(req: Request) {
     const filePath = `${documentId}.${file.name.split('.').pop() || 'bin'}`;
 
     const fileBuffer = Buffer.from(await file.arrayBuffer());
+
+    // HACK: may need to comment this out if using local supabase on macos
     const { error: storageError } = await supabaseStorage.storage.from('documents').upload(filePath, fileBuffer, {
       contentType: file.type || 'application/octet-stream',
       upsert: false,
@@ -65,6 +67,7 @@ export async function POST(req: Request) {
       }
       return NextResponse.json({ success: false, error: `Failed to store file: ${msg}` }, { status: 500 });
     }
+
     const { data: urlData } = supabaseStorage.storage.from('documents').getPublicUrl(filePath);
     const text = await extractTextFromFile(file);
     if (!text || text.trim().length === 0) return NextResponse.json({ error: 'Could not extract text from file' }, { status: 400 });
