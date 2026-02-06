@@ -13,6 +13,7 @@ set -e
 OLLAMA_URL="${OLLAMA_URL}"
 EMBEDDING_MODEL="${EMBEDDING_MODEL}"
 CHAT_MODEL="${CHAT_MODEL:-llama3.1:8b}"  # Default to llama3.1:8b if not set
+EMBEDDING_FORMAT="${EMBEDDING_FORMAT:-openai}"  # Format: 'openai' (v1/embeddings) or 'ollama' (api/embed)
 TIMEOUT=10
 
 # Colors for output
@@ -48,6 +49,7 @@ echo ""
 echo "Ollama URL: $OLLAMA_URL"
 echo "Embedding Model: $EMBEDDING_MODEL"
 echo "Chat Model: $CHAT_MODEL"
+echo "Embedding Format: $EMBEDDING_FORMAT"
 echo "Timeout: ${TIMEOUT}s"
 echo ""
 
@@ -96,16 +98,32 @@ fi
 echo ""
 echo -e "${YELLOW}3️⃣  Testing embedding generation...${NC}"
 
-EMBED_RESPONSE=$(curl -s --max-time 30 -X POST "$OLLAMA_URL/api/embed" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"'"$EMBEDDING_MODEL"'","input":"test embedding"}' 2>&1)
+# Use appropriate endpoint based on format
+if [ "$EMBEDDING_FORMAT" = "openai" ]; then
+  EMBED_RESPONSE=$(curl -s --max-time 30 -X POST "$OLLAMA_URL/v1/embeddings" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"'"$EMBEDDING_MODEL"'","input":"test embedding"}' 2>&1)
+else
+  # ollama format
+  EMBED_RESPONSE=$(curl -s --max-time 30 -X POST "$OLLAMA_URL/api/embed" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"'"$EMBEDDING_MODEL"'","input":"test embedding"}' 2>&1)
+fi
+
+printf "Embedding response: %s\n" "$EMBED_RESPONSE"
 
 if echo "$EMBED_RESPONSE" | grep -q '"embedding'; then
-  # Check for both single embedding and embeddings array formats
-  if echo "$EMBED_RESPONSE" | grep -q '"embeddings"'; then
+  # Handle OpenAI format (v1/embeddings with data array)
+  if echo "$EMBED_RESPONSE" | grep -q '"data"'; then
+    EMBED_DIM=$(echo "$EMBED_RESPONSE" | jq '.data[0].embedding | length' 2>/dev/null || echo "unknown")
+    echo -e "${GREEN}✅ Embedding generation works${NC}"
+    echo -e "   Embedding dimension: ${BLUE}$EMBED_DIM${NC}"
+  # Handle Ollama format (api/embed with embeddings array)
+  elif echo "$EMBED_RESPONSE" | grep -q '"embeddings"'; then
     EMBED_DIM=$(echo "$EMBED_RESPONSE" | jq '.embeddings[0] | length' 2>/dev/null || echo "unknown")
     echo -e "${GREEN}✅ Embedding generation works${NC}"
     echo -e "   Embedding dimension: ${BLUE}$EMBED_DIM${NC}"
+  # Handle single embedding format
   elif echo "$EMBED_RESPONSE" | grep -q '"embedding"'; then
     EMBED_DIM=$(echo "$EMBED_RESPONSE" | jq '.embedding | length' 2>/dev/null || echo "unknown")
     echo -e "${GREEN}✅ Embedding generation works${NC}"

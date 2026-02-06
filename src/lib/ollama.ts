@@ -9,8 +9,10 @@ interface OllamaEmbeddingRequest {
 }
 
 interface OllamaEmbeddingResponse {
-  embeddings?: number[][];  // Array of embeddings for batch input
+  embeddings?: number[][];  // Array of embeddings (Ollama format)
   embedding?: number[];      // Single embedding (some versions)
+  data?: Array<{ embedding: number[] }>;  // OpenAI format with data array
+  object?: string;           // OpenAI format object type
 }
 
 interface OllamaGenerateRequest {
@@ -39,6 +41,7 @@ interface OllamaTagsResponse {
 const OLLAMA_URL = process.env.OLLAMA_URL;
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL;
 const CHAT_MODEL = process.env.CHAT_MODEL;
+const EMBEDDING_FORMAT = process.env.EMBEDDING_FORMAT || 'openai';  // 'openai' or 'ollama'
 const REQUEST_TIMEOUT = 120000; // 2 minutes for Ollama requests
 
 // Validate required environment variables
@@ -67,6 +70,7 @@ if (!CHAT_MODEL) {
 const OLLAMA_URL_SAFE = OLLAMA_URL as string;
 const EMBEDDING_MODEL_SAFE = EMBEDDING_MODEL as string;
 const CHAT_MODEL_SAFE = CHAT_MODEL as string;
+const EMBEDDING_FORMAT_SAFE = EMBEDDING_FORMAT as 'openai' | 'ollama';
 
 /**
  * Generate embedding for input text using Ollama
@@ -75,20 +79,25 @@ const CHAT_MODEL_SAFE = CHAT_MODEL as string;
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
-    const request: OllamaEmbeddingRequest = {
-      model: EMBEDDING_MODEL_SAFE,
-      input: text,
-    };
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
-    const response = await fetch(`${OLLAMA_URL_SAFE}/api/embed`, {
+    // Choose endpoint based on configured format
+    const endpoint = EMBEDDING_FORMAT_SAFE === 'ollama'
+      ? `${OLLAMA_URL_SAFE}/api/embed`
+      : `${OLLAMA_URL_SAFE}/v1/embeddings`;
+
+    // Build request based on format
+    const requestBody = EMBEDDING_FORMAT_SAFE === 'ollama'
+      ? { model: EMBEDDING_MODEL_SAFE, input: text }
+      : { model: EMBEDDING_MODEL_SAFE, input: text };
+
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
 
@@ -100,15 +109,18 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 
     const data: OllamaEmbeddingResponse = await response.json();
 
-    // Handle both response formats:
-    // - embeddings: array of arrays (batch mode)
-    // - embedding: single array (single input)
+    // Handle multiple response formats:
+    // - OpenAI format: data array with embedding objects
+    // - Ollama format: embeddings array of arrays (batch mode)
+    // - Single embedding: single embedding array
     let embedding: number[] | undefined;
 
-    if (data.embeddings && Array.isArray(data.embeddings) && data.embeddings.length > 0) {
-      embedding = data.embeddings[0]; // Get first embedding from batch
+    if (data.data && Array.isArray(data.data) && data.data.length > 0) {
+      embedding = data.data[0].embedding; // OpenAI format
+    } else if (data.embeddings && Array.isArray(data.embeddings) && data.embeddings.length > 0) {
+      embedding = data.embeddings[0]; // Ollama batch format
     } else if (data.embedding && Array.isArray(data.embedding)) {
-      embedding = data.embedding;
+      embedding = data.embedding; // Single embedding format
     }
 
     if (!embedding) {
@@ -238,6 +250,7 @@ export async function validateOllamaSetup(): Promise<void> {
   console.log('🔍 Validating Ollama setup...');
   console.log(`   URL: ${OLLAMA_URL_SAFE}`);
   console.log(`   Embedding Model: ${EMBEDDING_MODEL_SAFE}`);
+  console.log(`   Embedding Format: ${EMBEDDING_FORMAT_SAFE}`);
   console.log(`   Chat Model: ${CHAT_MODEL_SAFE}`);
 
   // Check health
@@ -280,12 +293,14 @@ export async function validateOllamaSetup(): Promise<void> {
 export async function getOllamaInfo(): Promise<{
   url: string;
   embeddingModel: string;
+  embeddingFormat: string;
   chatModel: string;
   timeout: number;
 }> {
   return {
     url: OLLAMA_URL_SAFE,
     embeddingModel: EMBEDDING_MODEL_SAFE,
+    embeddingFormat: EMBEDDING_FORMAT_SAFE,
     chatModel: CHAT_MODEL_SAFE,
     timeout: REQUEST_TIMEOUT,
   };

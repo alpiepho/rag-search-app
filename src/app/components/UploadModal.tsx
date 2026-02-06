@@ -13,17 +13,53 @@ interface UploadProgress {
   error?: string;
 }
 
+interface DuplicateFile {
+  fileName: string;
+  fileIndex: number;
+  existingId: string;
+}
+
+interface DuplicateDecision {
+  fileName: string;
+  action: 'skip' | 'replace';
+}
+
 export default function UploadModal({ isOpen, onClose, onUploadSuccess }: UploadModalProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<Record<string, UploadProgress>>({});
   const [uploading, setUploading] = useState(false);
   const [overallMessage, setOverallMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [existingDocuments, setExistingDocuments] = useState<Array<{ id: string; file_name: string }>>([]);
+  const [duplicates, setDuplicates] = useState<DuplicateFile[]>([]);
+  const [currentDuplicateIndex, setCurrentDuplicateIndex] = useState(0);
+  const [duplicateDecisions, setDuplicateDecisions] = useState<DuplicateDecision[]>([]);
+  const [applyToAll, setApplyToAll] = useState(false);
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? 'hidden' : 'unset';
-    if (!isOpen) { setFiles([]); setUploadProgress({}); setOverallMessage(null); }
+    if (!isOpen) { 
+      setFiles([]); 
+      setUploadProgress({}); 
+      setOverallMessage(null);
+      setDuplicates([]);
+      setCurrentDuplicateIndex(0);
+      setDuplicateDecisions([]);
+      setApplyToAll(false);
+    } else {
+      fetchExistingDocuments();
+    }
     return () => { document.body.style.overflow = 'unset'; };
   }, [isOpen]);
+
+  const fetchExistingDocuments = async () => {
+    try {
+      const res = await fetch('/api/documents');
+      const data = await res.json();
+      setExistingDocuments(data.documents || []);
+    } catch (error) {
+      console.error('Failed to fetch documents:', error);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -42,16 +78,55 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }: Upload
     setUploadProgress(newProgress);
   };
 
-  const handleUpload = async () => {
-    if (files.length === 0) {
-      setOverallMessage({ type: 'error', text: 'Please select at least one file' });
-      return;
-    }
+  const checkForDuplicates = (): DuplicateFile[] => {
+    const foundDuplicates: DuplicateFile[] = [];
+    
+    files.forEach((file, index) => {
+      const existing = existingDocuments.find(doc => doc.file_name === file.name);
+      if (existing) {
+        foundDuplicates.push({
+          fileName: file.name,
+          fileIndex: index,
+          existingId: existing.id
+        });
+      }
+    });
 
+    return foundDuplicates;
+  };
+
+  const handleDuplicateDecision = (action: 'skip' | 'replace') => {
+    const currentDuplicate = duplicates[currentDuplicateIndex];
+    
+    setDuplicateDecisions([
+      ...duplicateDecisions,
+      { fileName: currentDuplicate.fileName, action }
+    ]);
+
+    if (applyToAll) {
+      // Apply decision to all remaining duplicates
+      const remainingDuplicates = duplicates.slice(currentDuplicateIndex + 1);
+      const newDecisions = remainingDuplicates.map(dup => ({
+        fileName: dup.fileName,
+        action
+      }));
+      setDuplicateDecisions(prev => [...prev, ...newDecisions]);
+      setApplyToAll(false);
+      proceedWithUpload([...duplicateDecisions, { fileName: currentDuplicate.fileName, action }, ...newDecisions]);
+    } else if (currentDuplicateIndex < duplicates.length - 1) {
+      setCurrentDuplicateIndex(currentDuplicateIndex + 1);
+    } else {
+      proceedWithUpload([...duplicateDecisions, { fileName: currentDuplicate.fileName, action }]);
+    }
+  };
+
+  const proceedWithUpload = async (decisions: DuplicateDecision[]) => {
     setUploading(true);
+    setDuplicates([]);
+    setCurrentDuplicateIndex(0);
+    setDuplicateDecisions([]);
     setOverallMessage(null);
 
-    // Initialize progress for all files
     const initialProgress: Record<string, UploadProgress> = {};
     files.forEach(file => {
       initialProgress[file.name] = { status: 'pending' };
@@ -59,10 +134,33 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }: Upload
     setUploadProgress(initialProgress);
 
     let successCount = 0;
+    let skippedCount = 0;
     let failureCount = 0;
 
     try {
       for (const file of files) {
+        const decision = decisions.find(d => d.fileName === file.name);
+
+        // Skip file if decided
+        if (decision?.action === 'skip') {
+          setUploadProgress(prev => ({
+            ...prev,
+            [file.name]: { status: 'success', chunks: 0 }
+          }));
+          skippedCount++;
+          continue;
+        }
+
+        // If replacing, delete old document first
+        if (decision?.action === 'replace') {
+          const duplicate = duplicates.find(dup => dup.fileName === file.name);
+          if (duplicate) {
+            await fetch(`/api/documents?id=${duplicate.existingId}`, {
+              method: 'DELETE'
+            });
+          }
+        }
+
         setUploadProgress(prev => ({
           ...prev,
           [file.name]: { status: 'uploading' }
@@ -101,13 +199,16 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }: Upload
         }
       }
 
-      const summary = `Uploaded ${successCount} of ${files.length} files successfully.${failureCount > 0 ? ` ${failureCount} failed.` : ''}`;
+      let summaryText = `Uploaded ${successCount}/${files.length} files successfully.`;
+      if (skippedCount > 0) summaryText += ` ${skippedCount} skipped.`;
+      if (failureCount > 0) summaryText += ` ${failureCount} failed.`;
+      
       setOverallMessage({ 
         type: failureCount === 0 ? 'success' : 'error', 
-        text: summary 
+        text: summaryText 
       });
 
-      if (failureCount === 0) {
+      if (failureCount === 0 && skippedCount === 0) {
         setTimeout(() => { onUploadSuccess?.(); onClose(); }, 1500);
       }
     } finally {
@@ -115,11 +216,32 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }: Upload
     }
   };
 
+  const handleUpload = async () => {
+    if (files.length === 0) {
+      setOverallMessage({ type: 'error', text: 'Please select at least one file' });
+      return;
+    }
+
+    const foundDuplicates = checkForDuplicates();
+
+    if (foundDuplicates.length > 0) {
+      setDuplicates(foundDuplicates);
+      setCurrentDuplicateIndex(0);
+      setDuplicateDecisions([]);
+      setApplyToAll(false);
+      return;
+    }
+
+    proceedWithUpload([]);
+  };
+
   if (!isOpen) return null;
 
   const totalFiles = files.length;
   const completedFiles = Object.values(uploadProgress).filter(p => p.status === 'success' || p.status === 'error').length;
   const successCount = Object.values(uploadProgress).filter(p => p.status === 'success').length;
+  const currentDuplicate = duplicates.length > 0 ? duplicates[currentDuplicateIndex] : null;
+  const isShowingDuplicateDialog = duplicates.length > 0 && currentDuplicateIndex < duplicates.length;
 
   return (
     <div
@@ -147,8 +269,72 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }: Upload
           </button>
         </div>
 
+        {/* Duplicate Dialog */}
+        {isShowingDuplicateDialog && currentDuplicate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75">
+            <div className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl max-w-md w-full mx-4 border border-gray-200 dark:border-gray-800">
+              <div className="p-6 border-b border-gray-200 dark:border-gray-800">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  Duplicate File Found
+                </h3>
+              </div>
+              
+              <div className="p-6 space-y-4">
+                <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+                  <p className="text-sm font-medium text-yellow-900 dark:text-yellow-200">
+                    A file named "<strong>{currentDuplicate.fileName}</strong>" already exists.
+                  </p>
+                </div>
+
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Duplicate {currentDuplicateIndex + 1} of {duplicates.length}
+                </p>
+
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={applyToAll}
+                    onChange={(e) => setApplyToAll(e.target.checked)}
+                    disabled={currentDuplicateIndex === duplicates.length - 1}
+                    className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    Apply to all remaining duplicates
+                  </span>
+                </label>
+              </div>
+
+              <div className="p-6 border-t border-gray-200 dark:border-gray-800 flex gap-3 justify-end">
+                <button
+                  onClick={() => {
+                    setDuplicates([]);
+                    setCurrentDuplicateIndex(0);
+                    setDuplicateDecisions([]);
+                    setApplyToAll(false);
+                  }}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleDuplicateDecision('skip')}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg font-medium"
+                >
+                  Skip
+                </button>
+                <button
+                  onClick={() => handleDuplicateDecision('replace')}
+                  className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-medium"
+                >
+                  Replace
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Content */}
-        <div className="p-6">
+        <div className="p-6" style={{ display: isShowingDuplicateDialog ? 'none' : 'block' }}>
           <div className="mb-6">
             <label htmlFor="upload-file-input" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Select one or more files (PDF, DOCX, or TXT)
