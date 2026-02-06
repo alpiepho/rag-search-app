@@ -119,7 +119,12 @@ export default function DocumentsPage() {
       <Navigation />
       <main className="max-w-7xl mx-auto p-8">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-3xl font-bold">Documents</h1>
+          <div>
+            <h1 className="text-3xl font-bold">Documents</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              Total: <span className="font-semibold">{documents.length}</span> document{documents.length !== 1 ? 's' : ''}
+            </p>
+          </div>
           <button
             onClick={() => setShowUploadModal(true)}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
