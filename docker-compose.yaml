@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app                    # Mount entire project directory
+      - /app/node_modules         # Keep node_modules in container only
+    env_file:
+      - .env.local                # Load environment variables from .env.local
+    command: npm run dev           # Run Next.js dev server interactively
