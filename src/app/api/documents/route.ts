@@ -101,12 +101,57 @@ export async function GET(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const id = new URL(req.url).searchParams.get('id');
-    if (!id) return NextResponse.json({ error: 'Document ID required' }, { status: 400 });
-    const { data: docs } = await supabase.from('documents').select('metadata').eq('metadata->>document_id', id).limit(1);
+    const url = new URL(req.url);
+    const idsParam = url.searchParams.get('ids');
+    const singleId = url.searchParams.get('id');
+
+    // Handle batch delete (multiple IDs)
+    if (idsParam) {
+      const ids = idsParam.split(',').filter(id => id.trim());
+      const results: Array<{ id: string; success: boolean; error?: string }> = [];
+
+      for (const id of ids) {
+        try {
+          const { data: docs } = await supabase.from('documents').select('metadata').eq('metadata->>document_id', id).limit(1);
+          const filePath = docs?.[0]?.metadata?.file_path;
+          
+          if (filePath) {
+            await supabaseStorage.storage.from('documents').remove([filePath]);
+          }
+          
+          const { error } = await supabase.from('documents').delete().eq('metadata->>document_id', id);
+          
+          if (error) {
+            results.push({ id, success: false, error: error.message });
+          } else {
+            results.push({ id, success: true });
+          }
+        } catch (error: any) {
+          results.push({ id, success: false, error: error.message });
+        }
+      }
+
+      const successful = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success).length;
+
+      return NextResponse.json({
+        success: failed === 0,
+        results,
+        summary: {
+          total: ids.length,
+          successful,
+          failed
+        }
+      });
+    }
+
+    // Handle single delete (backward compatible)
+    if (!singleId) return NextResponse.json({ error: 'Document ID required' }, { status: 400 });
+    
+    const { data: docs } = await supabase.from('documents').select('metadata').eq('metadata->>document_id', singleId).limit(1);
     const filePath = docs?.[0]?.metadata?.file_path;
     if (filePath) await supabaseStorage.storage.from('documents').remove([filePath]);
-    const { error } = await supabase.from('documents').delete().eq('metadata->>document_id', id);
+    const { error } = await supabase.from('documents').delete().eq('metadata->>document_id', singleId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ success: true, fileDeleted: !!filePath });
   } catch (error: any) {

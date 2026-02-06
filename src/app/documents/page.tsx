@@ -23,6 +23,8 @@ export default function DocumentsPage() {
   const [selectedPDF, setSelectedPDF] = useState<{ url: string; name: string; id?: string; isPDF?: boolean } | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     fetchDocuments();
@@ -65,6 +67,53 @@ export default function DocumentsPage() {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === documents.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(documents.map(d => d.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    const names = documents.filter(d => ids.includes(d.id)).map(d => d.file_name);
+    
+    const confirmMsg = `Delete ${ids.length} document(s)?\n\n${names.join('\n')}\n\nThis will permanently delete the documents, embeddings, and files.`;
+    if (!confirm(confirmMsg)) return;
+
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`/api/documents?ids=${ids.join(',')}`, { method: 'DELETE' });
+      const data = await res.json();
+      
+      if (data.error) {
+        alert(`Error: ${data.error}`);
+      } else {
+        setDocuments(documents.filter(doc => !ids.includes(doc.id)));
+        setSelectedIds(new Set());
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to delete documents');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
   return (
     <div className="min-h-screen">
       <Navigation />
@@ -75,9 +124,34 @@ export default function DocumentsPage() {
             onClick={() => setShowUploadModal(true)}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
           >
-            Upload Document
+            Upload Documents
           </button>
         </div>
+
+        {/* Bulk Action Toolbar */}
+        {selectedIds.size > 0 && (
+          <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg flex items-center justify-between">
+            <span className="text-sm font-medium text-blue-900 dark:text-blue-200">
+              {selectedIds.size} document{selectedIds.size !== 1 ? 's' : ''} selected
+            </span>
+            <div className="flex gap-3">
+              <button
+                onClick={clearSelection}
+                disabled={isDeleting}
+                className="px-3 py-1 text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Clear Selection
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={isDeleting}
+                className="px-3 py-1 text-sm bg-red-600 text-white hover:bg-red-700 rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Selected'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {loading ? (
           <div className="text-center py-12">
@@ -103,6 +177,14 @@ export default function DocumentsPage() {
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
                 <thead className="bg-gray-50 dark:bg-gray-800">
                   <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-12">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.size === documents.length && documents.length > 0}
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                      />
+                    </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       File Name
                     </th>
@@ -126,6 +208,14 @@ export default function DocumentsPage() {
                 <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
                   {documents.map((doc) => (
                     <tr key={doc.id} className="hover:bg-gray-50 dark:hover:bg-gray-800">
+                      <td className="px-6 py-4 whitespace-nowrap w-12">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(doc.id)}
+                          onChange={() => toggleSelect(doc.id)}
+                          className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                           {doc.file_name}
